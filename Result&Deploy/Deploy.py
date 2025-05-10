@@ -6,7 +6,7 @@ base_path = os.path.dirname(os.path.abspath(__file__))
 utils_path = os.path.join(base_path, '../Model')
 sys.path.append(utils_path)
 
-from predict import prediction
+from Predict import prediction
 
 form_values = {
     "Target" : "Steroid-Induced Diabetes",
