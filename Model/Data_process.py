@@ -20,12 +20,11 @@ for col in df.columns:
 
 category_columns = list(set(list_columns) - set(numerical_columns) - set(['Target']))
 encoder = OneHotEncoder(sparse_output=False)
-encoded = encoder.fit_transform(df[category_columns])
-encoded_df = pd.DataFrame(encoded, columns=encoder.get_feature_names_out(category_columns))
+encoded_df = encoder.fit_transform(df[category_columns])
+encoded_df = pd.DataFrame(encoded_df, columns=encoder.get_feature_names_out(category_columns))
 
 df_processed = pd.concat([df[numerical_columns], encoded_df], axis=1)
 df_processed.astype(float)
 df_processed['Target'] = df['Target']
-df_processed.head(10)
 
 df_processed.to_csv(os.path.join(base_path, '../Data/diabetes_dataset_processed.csv'), index=False)
