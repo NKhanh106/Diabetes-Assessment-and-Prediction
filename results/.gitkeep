@@ -1,0 +1,4 @@
+# This directory contains model evaluation results
+# Heatmap images (confusion matrices) are saved here after model training
+# Files: {model_name}_heatmap.png
+

@@ -1,0 +1,120 @@
+# Model files
+*.pkl
+*.joblib
+*.h5
+*.hdf5
+*.pt
+*.pth
+*.onnx
+*.pb
+*.tflite
+*.mlmodel
+models/
+*.model
+
+# Results and plots
+# First, ignore all image files
+*.png
+*.jpg
+*.jpeg
+*.pdf
+*.svg
+*.gif
+*.eps
+# Then, allow heatmap images in results/ directory (must come after ignore rule)
+!results/
+!results/*.png
+!results/*.jpg
+!results/*.jpeg
+!results/*.pdf
+!results/*.svg
+!results/*.gif
+!results/*.eps
+
+# Python cache
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+env/
+ENV/
+.venv
+.conda/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+
+# Jupyter Notebook
+.ipynb_checkpoints/
+*.ipynb_checkpoints
+
+# Logs
+*.log
+logs/
+*.out
+
+# Optuna database
+*.db
+optuna.db
+*.sqlite
+*.sqlite3
+
+# Data files
+# data/
+# *.csv
+# *.xlsx
+# *.xls
+# *.parquet
+# *.feather
+
+# Environment variables
+.env
+.env.local
+.env.*.local
+
+# OS files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Desktop.ini
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# Coverage reports
+htmlcov/
+.coverage
+.coverage.*
+coverage.xml
+*.cover
+
+# pytest
+.pytest_cache/
+.tox/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
