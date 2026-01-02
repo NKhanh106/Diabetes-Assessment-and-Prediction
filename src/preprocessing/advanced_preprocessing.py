@@ -1,6 +1,7 @@
 """
 Advanced preprocessing techniques for maximum model performance
 Includes outlier detection, feature engineering, scaling options, and more
+Refactored to support separate Fit (Train) and Transform (Test) phases to prevent Data Leakage.
 """
 import logging
 import pandas as pd
@@ -22,9 +23,9 @@ logger = logging.getLogger(__name__)
 
 
 def detect_outliers_iqr(df: pd.DataFrame, columns: Optional[List[str]] = None, 
-                       factor: float = 1.5) -> Dict[str, List[int]]:
+                       factor: float = 1.5) -> Dict[str, Dict[str, float]]:
     """
-    Detect outliers using Interquartile Range (IQR) method
+    Calculate outlier bounds using Interquartile Range (IQR) method (Fit phase)
     
     Args:
         df: Input DataFrame
@@ -32,12 +33,12 @@ def detect_outliers_iqr(df: pd.DataFrame, columns: Optional[List[str]] = None,
         factor: IQR factor (default 1.5)
         
     Returns:
-        Dictionary mapping column names to outlier indices
+        Dictionary mapping column names to bounds {'lower': float, 'upper': float}
     """
     if columns is None:
         columns = df.select_dtypes(include=[np.number]).columns.tolist()
     
-    outliers = {}
+    bounds = {}
     for col in columns:
         if col not in df.columns:
             continue
@@ -49,106 +50,68 @@ def detect_outliers_iqr(df: pd.DataFrame, columns: Optional[List[str]] = None,
         lower_bound = Q1 - factor * IQR
         upper_bound = Q3 + factor * IQR
         
-        outlier_mask = (df[col] < lower_bound) | (df[col] > upper_bound)
-        outlier_indices = df[outlier_mask].index.tolist()
-        
-        if outlier_indices:
-            outliers[col] = outlier_indices
+        bounds[col] = {'lower': lower_bound, 'upper': upper_bound}
     
-    return outliers
-
-
-def detect_outliers_zscore(df: pd.DataFrame, columns: Optional[List[str]] = None,
-                           threshold: float = 3.0) -> Dict[str, List[int]]:
-    """
-    Detect outliers using Z-score method
-    
-    Args:
-        df: Input DataFrame
-        columns: List of columns to check (None = all numerical)
-        threshold: Z-score threshold (default 3.0)
-        
-    Returns:
-        Dictionary mapping column names to outlier indices
-    """
-    if columns is None:
-        columns = df.select_dtypes(include=[np.number]).columns.tolist()
-    
-    outliers = {}
-    for col in columns:
-        if col not in df.columns:
-            continue
-        
-        z_scores = np.abs((df[col] - df[col].mean()) / df[col].std())
-        outlier_mask = z_scores > threshold
-        outlier_indices = df[outlier_mask].index.tolist()
-        
-        if outlier_indices:
-            outliers[col] = outlier_indices
-    
-    return outliers
+    return bounds
 
 
 def handle_outliers(df: pd.DataFrame, method: str = 'cap', 
                    columns: Optional[List[str]] = None,
-                   outlier_dict: Optional[Dict[str, List[int]]] = None) -> pd.DataFrame:
+                   bounds: Optional[Dict[str, Dict[str, float]]] = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    Handle outliers in numerical columns
+    Handle outliers in numerical columns using pre-calculated bounds or calculating them
     
     Args:
         df: Input DataFrame
-        method: 'cap' (cap at bounds), 'remove' (remove rows), 'winsorize' (winsorize)
+        method: 'cap' (cap at bounds), 'remove' (remove rows - TRAIN ONLY), 'winsorize'
         columns: Columns to process (None = all numerical)
-        outlier_dict: Pre-computed outliers (if None, will detect)
+        bounds: Pre-computed bounds (from train set). If None, will calculate.
         
     Returns:
-        DataFrame with outliers handled
+        Tuple of (Processed DataFrame, bounds dictionary)
     """
     df_processed = df.copy()
     
     if columns is None:
         columns = df.select_dtypes(include=[np.number]).columns.tolist()
     
-    if outlier_dict is None:
-        outlier_dict = detect_outliers_iqr(df, columns)
-    
-    if method == 'cap':
-        # Cap outliers at IQR bounds
-        for col in columns:
-            if col not in df.columns:
-                continue
-                
-            Q1 = df[col].quantile(0.25)
-            Q3 = df[col].quantile(0.75)
-            IQR = Q3 - Q1
-            
-            lower_bound = Q1 - 1.5 * IQR
-            upper_bound = Q3 + 1.5 * IQR
-            
-            df_processed[col] = df_processed[col].clip(lower=lower_bound, upper=upper_bound)
-            
-    elif method == 'winsorize':
-        # Winsorize at 1st and 99th percentiles
-        for col in columns:
-            if col not in df.columns:
-                continue
-                
-            lower = df[col].quantile(0.01)
-            upper = df[col].quantile(0.99)
-            df_processed[col] = df_processed[col].clip(lower=lower, upper=upper)
-            
-    elif method == 'remove':
-        # Remove rows with outliers
-        outlier_indices = set()
-        for indices in outlier_dict.values():
-            outlier_indices.update(indices)
-        df_processed = df_processed.drop(index=list(outlier_indices))
+    # If using 'remove', we just drop rows based on current data (usually only for train)
+    # BE CAREFUL: 'remove' shouldn't be used on Test set typically, but if requested we do it.
+    if method == 'remove':
+        if bounds is None: # Calculate indices
+             # Note: For 'remove', we typically re-detect roughly or just don't support it for test
+             # Here we implement simple IQR detect and remove
+             curr_bounds = detect_outliers_iqr(df, columns)
+        else:
+             curr_bounds = bounds
+
+        indices_to_drop = set()
+        for col, bound in curr_bounds.items():
+            if col in df.columns:
+                 mask = (df[col] < bound['lower']) | (df[col] > bound['upper'])
+                 indices_to_drop.update(df[mask].index.tolist())
         
-    return df_processed
+        if indices_to_drop:
+            df_processed = df_processed.drop(index=list(indices_to_drop))
+        
+        return df_processed, curr_bounds
+
+    # For 'cap' or 'winsorize' (winsorize is similar to cap but with percentiles, here mapping to bounds)
+    if bounds is None:
+        bounds = detect_outliers_iqr(df, columns)
+    
+    for col, bound in bounds.items():
+        if col not in df.columns:
+            continue
+            
+        df_processed[col] = df_processed[col].clip(lower=bound['lower'], upper=bound['upper'])
+            
+    return df_processed, bounds
 
 
 def apply_scaling(df: pd.DataFrame, method: str = 'standard',
-                 columns: Optional[List[str]] = None) -> Tuple[pd.DataFrame, Any]:
+                 columns: Optional[List[str]] = None,
+                 scaler: Any = None) -> Tuple[pd.DataFrame, Any]:
     """
     Apply different scaling methods to numerical features
     
@@ -156,52 +119,62 @@ def apply_scaling(df: pd.DataFrame, method: str = 'standard',
         df: Input DataFrame
         method: 'standard', 'robust', 'minmax', 'quantile', 'power'
         columns: Columns to scale (None = all numerical)
+        scaler: Existing scaler object (if None, will create and fit)
         
     Returns:
         Tuple of (scaled DataFrame, scaler object)
     """
     if columns is None:
         columns = df.select_dtypes(include=[np.number]).columns.tolist()
-        # Exclude target if present
         columns = [c for c in columns if c != 'Target']
     
     if not columns:
-        return df.copy(), None
+        return df.copy(), scaler
     
     df_scaled = df.copy()
     
-    if method == 'standard':
-        scaler = StandardScaler()
-    elif method == 'robust':
-        scaler = RobustScaler()  # Better for outliers
-    elif method == 'minmax':
-        scaler = MinMaxScaler()  # Scale to [0, 1]
-    elif method == 'quantile':
-        scaler = QuantileTransformer(output_distribution='normal', random_state=42)
-    elif method == 'power':
-        scaler = PowerTransformer(method='yeo-johnson', standardize=True)
+    if scaler is None:
+        # Fit phase
+        if method == 'standard':
+            scaler = StandardScaler()
+        elif method == 'robust':
+            scaler = RobustScaler()
+        elif method == 'minmax':
+            scaler = MinMaxScaler()
+        elif method == 'quantile':
+            scaler = QuantileTransformer(output_distribution='normal', random_state=42)
+        elif method == 'power':
+            scaler = PowerTransformer(method='yeo-johnson', standardize=True)
+        else:
+            logger.warning(f"Unknown scaling method: {method}, using StandardScaler")
+            scaler = StandardScaler()
+        
+        df_scaled[columns] = scaler.fit_transform(df[columns])
     else:
-        logger.warning(f"Unknown scaling method: {method}, using StandardScaler")
-        scaler = StandardScaler()
-    
-    df_scaled[columns] = scaler.fit_transform(df[columns])
+        # Transform phase
+        # Check if columns match what the scaler expects? 
+        # For simplicity, we assume columns provided match training columns or strictly follow order
+        try:
+            df_scaled[columns] = scaler.transform(df[columns])
+        except Exception as e:
+            logger.warning(f"Scaling transform failed: {e}. Returning unscaled data for these columns.")
     
     return df_scaled, scaler
 
 
 def create_interaction_features(df: pd.DataFrame, 
                                feature_pairs: Optional[List[Tuple[str, str]]] = None,
-                               max_interactions: int = 10) -> pd.DataFrame:
+                               max_interactions: int = 10) -> Tuple[pd.DataFrame, List[Tuple[str, str]]]:
     """
     Create interaction features (multiplication of feature pairs)
     
     Args:
         df: Input DataFrame
-        feature_pairs: List of (col1, col2) tuples (None = auto-generate top correlations)
+        feature_pairs: List of (col1, col2) tuples (None = auto-generate top correlations from df)
         max_interactions: Maximum number of interactions to create
         
     Returns:
-        DataFrame with interaction features added
+        Tuple (DataFrame with interaction features, feature_pairs used)
     """
     df_enhanced = df.copy()
     
@@ -210,50 +183,42 @@ def create_interaction_features(df: pd.DataFrame,
         numerical_cols.remove('Target')
     
     if len(numerical_cols) < 2:
-        return df_enhanced
+        return df_enhanced, []
     
     if feature_pairs is None:
-        # Auto-generate: find top correlated pairs
+        # Auto-generate: find top correlated pairs (Fit phase)
         corr_matrix = df[numerical_cols].corr().abs()
-        np.fill_diagonal(corr_matrix.values, 0)  # Remove diagonal
+        np.fill_diagonal(corr_matrix.values, 0)
         
-        # Get top correlations
-        feature_pairs = []
+        feature_pairs_list = []
         for i in range(min(max_interactions, len(numerical_cols) * (len(numerical_cols) - 1) // 2)):
-            max_corr_idx = np.unravel_index(corr_matrix.values.argmax(), corr_matrix.shape)
-            col1, col2 = corr_matrix.index[max_corr_idx[0]], corr_matrix.columns[max_corr_idx[1]]
-            if (col1, col2) not in feature_pairs and (col2, col1) not in feature_pairs:
-                feature_pairs.append((col1, col2))
-            corr_matrix.iloc[max_corr_idx[0], max_corr_idx[1]] = 0
+            try:
+                max_corr_idx = np.unravel_index(corr_matrix.values.argmax(), corr_matrix.shape)
+                col1, col2 = corr_matrix.index[max_corr_idx[0]], corr_matrix.columns[max_corr_idx[1]]
+                if (col1, col2) not in feature_pairs_list and (col2, col1) not in feature_pairs_list:
+                    feature_pairs_list.append((col1, col2))
+                corr_matrix.iloc[max_corr_idx[0], max_corr_idx[1]] = 0
+            except ValueError:
+                break
+        feature_pairs = feature_pairs_list
     
     # Create interaction features
-    interaction_count = 0
-    for col1, col2 in feature_pairs:
-        if col1 in df.columns and col2 in df.columns:
-            interaction_name = f"{col1}_x_{col2}"
-            if interaction_name not in df_enhanced.columns:
+    created_pairs = []
+    if feature_pairs:
+        for col1, col2 in feature_pairs:
+            if col1 in df.columns and col2 in df.columns:
+                interaction_name = f"{col1}_x_{col2}"
                 df_enhanced[interaction_name] = df[col1] * df[col2]
-                interaction_count += 1
-                if interaction_count >= max_interactions:
-                    break
+                created_pairs.append((col1, col2))
     
-    logger.info(f"Created {interaction_count} interaction features")
-    return df_enhanced
+    return df_enhanced, created_pairs
 
 
 def create_binned_features(df: pd.DataFrame, columns: Optional[List[str]] = None,
-                          n_bins: int = 5, strategy: str = 'quantile') -> pd.DataFrame:
+                          n_bins: int = 5, strategy: str = 'quantile',
+                          binners: Dict = None) -> Tuple[pd.DataFrame, Dict]:
     """
-    Create binned (discretized) features for numerical columns
-    
-    Args:
-        df: Input DataFrame
-        columns: Columns to bin (None = all numerical)
-        n_bins: Number of bins
-        strategy: 'quantile' or 'uniform'
-        
-    Returns:
-        DataFrame with binned features added
+    Create binned features (Fit/Transform)
     """
     from sklearn.preprocessing import KBinsDiscretizer
     
@@ -263,37 +228,47 @@ def create_binned_features(df: pd.DataFrame, columns: Optional[List[str]] = None
             columns.remove('Target')
     
     if not columns:
-        return df.copy()
+        return df.copy(), {}
     
     df_enhanced = df.copy()
+    if binners is None:
+        binners = {}
+        # Fit phase
+        for col in columns:
+            if col not in df.columns:
+                continue
+            try:
+                binner = KBinsDiscretizer(n_bins=n_bins, encode='ordinal', strategy=strategy)
+                binned_col = f"{col}_binned"
+                # Check for low variance causing bin edges to not be unique
+                df_enhanced[binned_col] = binner.fit_transform(df[[col]]).flatten()
+                binners[col] = binner
+            except Exception as e:
+                logger.debug(f"Skipping binning for {col}: {e}")
+    else:
+        # Transform phase
+        for col, binner in binners.items():
+            if col in df.columns:
+                binned_col = f"{col}_binned"
+                try:
+                    df_enhanced[binned_col] = binner.transform(df[[col]]).flatten()
+                except Exception:
+                    pass
     
-    for col in columns:
-        if col not in df.columns:
-            continue
-        
-        binner = KBinsDiscretizer(n_bins=n_bins, encode='ordinal', strategy=strategy)
-        binned_col = f"{col}_binned"
-        df_enhanced[binned_col] = binner.fit_transform(df[[col]]).flatten()
-    
-    logger.info(f"Created binned features for {len(columns)} columns")
-    return df_enhanced
+    return df_enhanced, binners
 
 
 def apply_log_transform(df: pd.DataFrame, columns: Optional[List[str]] = None,
-                        add_one: bool = True) -> pd.DataFrame:
+                        add_one: bool = True) -> Tuple[pd.DataFrame, List[str]]:
     """
-    Apply log transformation to numerical features (useful for skewed data)
+    Apply log transformation to numerical features.
+    If columns is None, detects likely skewed columns (Fit phase).
+    If columns is list, applies to those columns (Transform phase).
+    """
+    df_transformed = df.copy()
     
-    Args:
-        df: Input DataFrame
-        columns: Columns to transform (None = auto-detect skewed columns)
-        add_one: Add 1 before log to handle zeros
-        
-    Returns:
-        DataFrame with log-transformed features
-    """
     if columns is None:
-        # Auto-detect skewed columns (skewness > 1)
+        # Auto-detect skewed columns
         numerical_cols = df.select_dtypes(include=[np.number]).columns.tolist()
         if 'Target' in numerical_cols:
             numerical_cols.remove('Target')
@@ -301,226 +276,231 @@ def apply_log_transform(df: pd.DataFrame, columns: Optional[List[str]] = None,
         columns = []
         for col in numerical_cols:
             if col in df.columns:
+                # Simple skew check - safe to do on train only and apply to test
                 skewness = df[col].skew()
-                if abs(skewness) > 1.0:  # Highly skewed
+                if abs(skewness) > 1.0:
                     columns.append(col)
     
-    if not columns:
-        return df.copy()
-    
-    df_transformed = df.copy()
-    
     for col in columns:
-        if col not in df.columns:
-            continue
-        
-        log_col = f"{col}_log"
-        if add_one:
-            df_transformed[log_col] = np.log1p(df[col])
-        else:
-            df_transformed[log_col] = np.log(df[col] + 1e-10)  # Small epsilon to avoid log(0)
+        if col in df.columns:
+            log_col = f"{col}_log"
+            if add_one:
+                df_transformed[log_col] = np.log1p(df[col].clip(lower=0)) # Ensure non-negative
+            else:
+                df_transformed[log_col] = np.log(df[col].clip(lower=1e-10))
     
-    logger.info(f"Applied log transformation to {len(columns)} columns")
-    return df_transformed
+    return df_transformed, columns
 
 
 def remove_multicollinearity(df: pd.DataFrame, threshold: float = 0.95,
-                            target_col: str = 'Target') -> pd.DataFrame:
+                            target_col: str = 'Target',
+                            keep_columns: Optional[List[str]] = None) -> Tuple[pd.DataFrame, List[str]]:
     """
-    Remove highly correlated features to reduce multicollinearity
+    Remove highly correlated features.
+    Fit phase: Calculates correlation, determines columns to keep.
+    Transform phase: Keeps only the columns determined in Fit phase.
+    """
+    if keep_columns is not None:
+        # Transform phase: just select the columns
+        # Ensure we don't try to select columns that don't exist (if input is weird)
+        # Also ensure we keep Target if it exists
+        valid_cols = [c for c in keep_columns if c in df.columns]
+        if target_col in df.columns and target_col not in valid_cols:
+             valid_cols.append(target_col)
+        return df[valid_cols], keep_columns
     
-    Args:
-        df: Input DataFrame
-        threshold: Correlation threshold (default 0.95)
-        target_col: Target column name to exclude
-        
-    Returns:
-        DataFrame with multicollinear features removed
-    """
+    # Fit phase:
     feature_cols = [c for c in df.columns if c != target_col]
     numerical_cols = df[feature_cols].select_dtypes(include=[np.number]).columns.tolist()
     
     if len(numerical_cols) < 2:
-        return df.copy()
+        return df.copy(), df.columns.tolist()
     
-    # Calculate correlation matrix
     corr_matrix = df[numerical_cols].corr().abs()
+    upper_triangle = corr_matrix.where(np.triu(np.ones(corr_matrix.shape), k=1).astype(bool))
     
-    # Find pairs with high correlation
-    upper_triangle = corr_matrix.where(
-        np.triu(np.ones(corr_matrix.shape), k=1).astype(bool)
-    )
+    to_drop = [column for column in upper_triangle.columns if any(upper_triangle[column] > threshold)]
     
-    # Find features to drop
-    to_drop = [column for column in upper_triangle.columns 
-               if any(upper_triangle[column] > threshold)]
-    
-    if to_drop:
-        logger.info(f"Removing {len(to_drop)} multicollinear features: {to_drop[:5]}...")
-        df_cleaned = df.drop(columns=to_drop)
-    else:
-        df_cleaned = df.copy()
-    
-    return df_cleaned
+    df_cleaned = df.drop(columns=to_drop)
+    return df_cleaned, df_cleaned.columns.tolist()
 
 
-def select_features_statistical(X: pd.DataFrame, y: pd.Series, 
-                               method: str = 'f_classif', k: int = 50) -> Tuple[pd.DataFrame, Any]:
+def select_features_statistical(X: pd.DataFrame, y: Optional[pd.Series], 
+                               method: str = 'f_classif', k: int = 50,
+                               selector: Any = None) -> Tuple[pd.DataFrame, Any]:
     """
-    Select top features using statistical methods
-    
-    Args:
-        X: Feature DataFrame
-        y: Target Series
-        method: 'f_classif' or 'mutual_info_classif'
-        k: Number of features to select
+    Select features using statistical tests (Fit/Transform)
+    """
+    if selector is None:
+        if y is None:
+            raise ValueError("y is required for fitting feature selection")
+        # Fit phase
+        if method == 'f_classif':
+            selector = SelectKBest(score_func=f_classif, k=min(k, X.shape[1]))
+        elif method == 'mutual_info_classif':
+            selector = SelectKBest(score_func=mutual_info_classif, k=min(k, X.shape[1]))
+        else:
+            raise ValueError(f"Unknown method: {method}")
         
-    Returns:
-        Tuple of (selected features DataFrame, selector object)
-    """
-    if method == 'f_classif':
-        selector = SelectKBest(score_func=f_classif, k=min(k, X.shape[1]))
-    elif method == 'mutual_info_classif':
-        selector = SelectKBest(score_func=mutual_info_classif, k=min(k, X.shape[1]))
+        X_selected = selector.fit_transform(X, y)
     else:
-        raise ValueError(f"Unknown method: {method}")
-    
-    X_selected = selector.fit_transform(X, y)
+        # Transform phase
+        X_selected = selector.transform(X)
+        
     selected_features = X.columns[selector.get_support()].tolist()
-    
     X_selected_df = pd.DataFrame(X_selected, columns=selected_features, index=X.index)
     
-    logger.info(f"Selected {len(selected_features)} features using {method}")
     return X_selected_df, selector
 
 
 def remove_low_variance_features(df: pd.DataFrame, threshold: float = 0.01,
-                                target_col: str = 'Target') -> Tuple[pd.DataFrame, Any]:
+                                target_col: str = 'Target',
+                                selector: Any = None) -> Tuple[pd.DataFrame, Any]:
     """
-    Remove features with low variance (likely uninformative)
-    
-    Args:
-        df: Input DataFrame
-        threshold: Variance threshold
-        target_col: Target column name to exclude
-        
-    Returns:
-        Tuple of (cleaned DataFrame, VarianceThreshold object)
+    Remove low variance features (Fit/Transform)
     """
     feature_cols = [c for c in df.columns if c != target_col]
     X = df[feature_cols]
     
-    selector = VarianceThreshold(threshold=threshold)
-    X_selected = selector.fit_transform(X)
+    if selector is None:
+        # Fit phase
+        selector = VarianceThreshold(threshold=threshold)
+        X_selected = selector.fit_transform(X)
+    else:
+        # Transform phase
+        X_selected = selector.transform(X)
     
     selected_features = X.columns[selector.get_support()].tolist()
     X_selected_df = pd.DataFrame(X_selected, columns=selected_features, index=df.index)
     
-    # Add target back if present
     if target_col in df.columns:
         X_selected_df[target_col] = df[target_col]
-    
-    removed_count = len(feature_cols) - len(selected_features)
-    if removed_count > 0:
-        logger.info(f"Removed {removed_count} low-variance features")
-    
+        
     return X_selected_df, selector
 
 
 def advanced_preprocessing_pipeline(df: pd.DataFrame, 
                                     target_col: str = 'Target',
-                                    handle_outliers: bool = True,
+                                    handle_outliers_flag: bool = True,
                                     outlier_method: str = 'cap',
-                                    apply_scaling: bool = False,
+                                    apply_scaling_flag: bool = False,
                                     scaling_method: str = 'robust',
-                                    create_interactions: bool = False,
+                                    create_interactions_flag: bool = False,
                                     max_interactions: int = 10,
-                                    create_bins: bool = False,
-                                    apply_log_transform: bool = False,
-                                    remove_multicollinear: bool = True,
-                                    remove_low_variance: bool = True,
+                                    create_bins_flag: bool = False,
+                                    apply_log_transform_flag: bool = False,
+                                    remove_multicollinear_flag: bool = True,
+                                    remove_low_variance_flag: bool = True,
                                     feature_selection: Optional[str] = None,
-                                    n_features_select: int = 50) -> Tuple[pd.DataFrame, Dict[str, Any]]:
+                                    n_features_select: int = 50,
+                                    artifacts: Optional[Dict[str, Any]] = None) -> Tuple[pd.DataFrame, Dict[str, Any]]:
     """
-    Complete advanced preprocessing pipeline
+    Complete advanced preprocessing pipeline with Fit/Transform separation
     
     Args:
-        df: Input DataFrame
-        target_col: Target column name
-        handle_outliers: Whether to handle outliers
-        outlier_method: 'cap', 'winsorize', or 'remove'
-        apply_scaling: Whether to apply scaling
-        scaling_method: 'standard', 'robust', 'minmax', 'quantile', 'power'
-        create_interactions: Whether to create interaction features
-        max_interactions: Maximum number of interactions
-        create_bins: Whether to create binned features
-        apply_log_transform: Whether to apply log transformation
-        remove_multicollinear: Whether to remove multicollinear features
-        remove_low_variance: Whether to remove low variance features
-        feature_selection: 'f_classif', 'mutual_info_classif', or None
-        n_features_select: Number of features to select
+        df: Input DataFrame (Train or Test)
+        artifacts: Dictionary of artifacts from training (if None, will fit and return new artifacts)
         
     Returns:
-        Tuple of (processed DataFrame, preprocessing artifacts dictionary)
+        Tuple of (processed DataFrame, artifacts dictionary)
     """
     df_processed = df.copy()
-    artifacts = {}
     
-    logger.info("Starting advanced preprocessing pipeline...")
+    # Initialize artifacts if fit phase
+    is_fit = artifacts is None
+    if is_fit:
+        artifacts = {}
+        logger.info("Starting advanced preprocessing pipeline (FIT phase)...")
+    else:
+        logger.info("Starting advanced preprocessing pipeline (TRANSFORM phase)...")
     
     # Step 1: Handle outliers
-    if handle_outliers:
-        logger.info(f"Handling outliers using method: {outlier_method}")
-        outliers = detect_outliers_iqr(df_processed, columns=None)
-        if outliers:
-            logger.info(f"Found outliers in {len(outliers)} columns")
-            df_processed = handle_outliers(df_processed, method=outlier_method)
-            artifacts['outliers'] = outliers
+    if handle_outliers_flag:
+        if is_fit:
+            # We assume capping is safer than removing to avoid data loss, or we use bounds
+            bounds = None
         else:
-            logger.info("No outliers detected")
-    
-    # Step 2: Feature engineering - Log transformation
-    if apply_log_transform:
-        logger.info("Applying log transformation to skewed features...")
-        df_processed = apply_log_transform(df_processed)
-    
-    # Step 3: Feature engineering - Binning
-    if create_bins:
-        logger.info("Creating binned features...")
-        df_processed = create_binned_features(df_processed)
-    
-    # Step 4: Feature engineering - Interactions
-    if create_interactions:
-        logger.info("Creating interaction features...")
-        df_processed = create_interaction_features(df_processed, max_interactions=max_interactions)
-    
-    # Step 5: Remove low variance features
-    if remove_low_variance:
-        logger.info("Removing low variance features...")
-        df_processed, variance_selector = remove_low_variance_features(df_processed, target_col=target_col)
-        artifacts['variance_selector'] = variance_selector
-    
-    # Step 6: Remove multicollinearity
-    if remove_multicollinear:
-        logger.info("Removing multicollinear features...")
-        df_processed = remove_multicollinearity(df_processed, target_col=target_col)
-    
-    # Step 7: Apply scaling (if needed - usually done in model pipeline)
-    if apply_scaling:
-        logger.info(f"Applying {scaling_method} scaling...")
-        df_processed, scaler = apply_scaling(df_processed, method=scaling_method)
-        artifacts['scaler'] = scaler
-    
-    # Step 8: Feature selection (if target is available)
-    if feature_selection and target_col in df_processed.columns:
-        logger.info(f"Selecting features using {feature_selection}...")
-        X = df_processed.drop(columns=[target_col])
-        y = df_processed[target_col]
-        X_selected, selector = select_features_statistical(X, y, method=feature_selection, k=n_features_select)
-        X_selected[target_col] = y
-        df_processed = X_selected
-        artifacts['feature_selector'] = selector
-    
-    logger.info(f"Advanced preprocessing completed. Final shape: {df_processed.shape}")
+            bounds = artifacts.get('outlier_bounds')
+            
+        df_processed, new_bounds = handle_outliers(df_processed, method=outlier_method, bounds=bounds)
+        if is_fit:
+            artifacts['outlier_bounds'] = new_bounds
+
+    # Step 2: Log Transform
+    if apply_log_transform_flag:
+        log_cols = artifacts.get('log_columns') if not is_fit else None
+        df_processed, log_cols = apply_log_transform(df_processed, columns=log_cols)
+        if is_fit:
+            artifacts['log_columns'] = log_cols
+
+    # Step 3: Binning
+    if create_bins_flag:
+        binners = artifacts.get('binners') if not is_fit else None
+        df_processed, binners = create_binned_features(df_processed, binners=binners)
+        if is_fit:
+            artifacts['binners'] = binners
+
+    # Step 4: Interactions
+    if create_interactions_flag:
+        pairs = artifacts.get('interaction_pairs') if not is_fit else None
+        df_processed, pairs = create_interaction_features(df_processed, feature_pairs=pairs, max_interactions=max_interactions)
+        if is_fit:
+            artifacts['interaction_pairs'] = pairs
+
+    # Step 5: Low Variance
+    if remove_low_variance_flag:
+        var_selector = artifacts.get('variance_selector') if not is_fit else None
+        try:
+            df_processed, var_selector = remove_low_variance_features(df_processed, target_col=target_col, selector=var_selector)
+            if is_fit:
+                artifacts['variance_selector'] = var_selector
+        except Exception as e:
+            logger.warning(f"Low variance removal failed: {e}")
+
+    # Step 6: Multicollinearity
+    if remove_multicollinear_flag:
+        keep_cols = artifacts.get('multicollinear_keep_cols') if not is_fit else None
+        df_processed, keep_cols = remove_multicollinearity(df_processed, target_col=target_col, keep_columns=keep_cols)
+        if is_fit:
+            artifacts['multicollinear_keep_cols'] = keep_cols
+
+    # Step 7: Scaling (Optional here, usually in Pipeline)
+    if apply_scaling_flag:
+        scaler = artifacts.get('scaler') if not is_fit else None
+        df_processed, scaler = apply_scaling(df_processed, method=scaling_method, scaler=scaler)
+        if is_fit:
+            artifacts['scaler'] = scaler
+
+    # Step 8: Feature Selection
+    if feature_selection:
+        feat_selector = artifacts.get('feature_selector') if not is_fit else None
+        
+        # Determine X and y
+        y = None
+        if target_col in df_processed.columns:
+            y = df_processed[target_col]
+            X = df_processed.drop(columns=[target_col])
+        else:
+            X = df_processed # Test set might not have target or it was dropped
+            
+        try:
+            if is_fit: # Needs y
+                if y is not None:
+                     X_sel, feat_selector = select_features_statistical(X, y, method=feature_selection, k=n_features_select, selector=None)
+                     if target_col in df_processed.columns:
+                         X_sel[target_col] = y
+                     df_processed = X_sel
+                     artifacts['feature_selector'] = feat_selector
+            else:
+                 if feat_selector:
+                     X_sel, _ = select_features_statistical(X, None, selector=feat_selector)
+                     if target_col in df_processed.columns:
+                         X_sel[target_col] = y
+                     df_processed = X_sel
+        except Exception as e:
+            logger.warning(f"Feature selection failed: {e}")
+
+    logger.info(f"Advanced preprocessing completed. Shape: {df_processed.shape}")
     return df_processed, artifacts
+
 

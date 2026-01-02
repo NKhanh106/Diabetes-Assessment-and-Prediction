@@ -114,7 +114,7 @@ def main():
         validation = validate_raw_data(df)
         
         if validation['duplicate_rows'] > 0:
-            logger.warning(f"Found {validation['duplicate_rows']} duplicate rows. Consider removing them.")
+            logger.warning(f"Found {validation['duplicate_rows']} duplicate rows.")
         
         # Preprocess data with optimizations
         logger.info("Preprocessing data...")

@@ -1,51 +1,73 @@
 # Diabetes Assessment and Prediction
 
-A machine learning project for predicting diabetes types using an ensemble of 5 different models.
+A production-ready machine learning system for diabetes type classification using an ensemble of five optimized models with automated hyperparameter tuning.
 
 ## Overview
 
-This project uses an ensemble approach with 5 machine learning models to predict diabetes types:
-- **K-Nearest Neighbors (KNN)**
-- **Support Vector Machine (SVM)**
-- **Random Forest**
-- **Logistic Regression**
-- **XGBoost**
+This project implements a comprehensive machine learning pipeline for diabetes type prediction using an ensemble approach. The system employs five distinct algorithms with Optuna-based hyperparameter optimization, advanced preprocessing techniques, and weighted ensemble voting for robust predictions.
 
-The final prediction is made using weighted voting from all 5 models.
+### Models
 
-## Project Structure
+- **K-Nearest Neighbors- **KNN**: 45 (Feature selection and dimensionality reduction enabled)
+- **Logistic Regression**: 75 (Polynomial features and interaction terms included)
+- **Random Forest**: 90 (High robustness and feature importance analysis)
+- **Naive Bayes**: 82 (Efficient for high-dimensional data)
+- **XGBoost**: 90 (Gradient boosting with regularization)
+- **LightGBM**: 91 (High efficiency and accuracy)boosting with efficient histogram-based algorithms
+
+## Architecture
+
+### Project Structure
 
 ```
 Diabetes-Assessment-and-Prediction/
-├── data/                          # Data files
-│   ├── raw/                       # Raw dataset
-│   └── processed/                 # Processed dataset
+├── data/                          # Data storage
+│   ├── raw/                       # Raw dataset files
+│   └── processed/                 # Preprocessed dataset files
 │
 ├── src/                           # Source code
-│   ├── config.py                  # Configuration
-│   ├── utils.py                   # Utility functions
-│   ├── models/                    # Model trainers
-│   │   ├── base_trainer.py
-│   │   ├── knn.py
-│   │   ├── svm.py
-│   │   ├── random_forest.py
-│   │   ├── logistic_regression.py
-│   │   └── xgboost.py
-│   ├── preprocessing/             # Data preprocessing
-│   │   └── data_processor.py
+│   ├── config.py                  # Centralized configuration
+│   ├── utils.py                   # Data processing and evaluation utilities
+│   ├── train_all_models.py        # Batch training orchestration
+│   ├── models/                    # Model implementations
+│   │   ├── base_trainer.py        # Abstract base class for all trainers
+│   │   ├── knn.py                 # KNN model trainer
+│   │   ├── naive_bayes.py         # Naive Bayes trainer
+│   │   ├── random_forest.py       # Random Forest trainer
+│   │   ├── logistic_regression.py # Logistic Regression trainer
+│   │   ├── xgboost.py             # XGBoost trainer
+│   │   └── lightgbm.py            # LightGBM trainer
+│   ├── preprocessing/             # Data preprocessing modules
+│   │   ├── data_processor.py      # Main preprocessing pipeline
+│   │   └── advanced_preprocessing.py # Advanced feature engineering
 │   └── prediction/                # Prediction module
-│       └── predictor.py
+│       └── predictor.py           # Ensemble prediction system
 │
-├── models/                        # Saved trained models (generated)
+├── models/                        # Trained model artifacts (generated)
+│   ├── knn/                       # KNN model files
+│   ├── naive_bayes/               # Naive Bayes model files
+│   ├── random_forest/             # Random Forest files
+│   ├── logistic_regression/       # Logistic Regression files
+│   ├── xgboost/                   # XGBoost files
+│   └── lightgbm/                  # LightGBM files
+│
 ├── results/                       # Evaluation results (generated)
-├── app/                           # Streamlit application
-│   └── deploy.py
-└── notebooks/                     # Jupyter notebooks (optional)
+│   └── *_heatmap.png              # Confusion matrix visualizations
+│
+├── app/                           # Deployment application
+│   └── deploy.py                  # Streamlit web interface
+│
+└── notebooks/                     # Jupyter notebooks for analysis
 ```
 
-See [STRUCTURE.md](STRUCTURE.md) for detailed structure documentation.
-
 ## Installation
+
+### Prerequisites
+
+- Python 3.8+
+- pip package manager
+
+### Setup
 
 1. **Clone the repository:**
    ```bash
@@ -53,203 +75,212 @@ See [STRUCTURE.md](STRUCTURE.md) for detailed structure documentation.
    cd Diabetes-Assessment-and-Prediction
    ```
 
-2. **Download the dataset:**
-   
-   The dataset is available on Kaggle. You can download it using one of the following methods:
-   
-   **Option 1: Using Kaggle API (Recommended)**
-   ```bash
-   # Install Kaggle API (if not already installed)
-   pip install kaggle
-   
-   # Set up Kaggle API credentials (place your kaggle.json in ~/.kaggle/)
-   # Download the dataset
-   kaggle datasets download -d ankitbatra1210/diabetes-dataset
-   
-   # Extract and place the CSV file in data/raw/
-   unzip diabetes-dataset.zip -d data/raw/
-   # Or on Windows:
-   # Expand-Archive diabetes-dataset.zip -DestinationPath data/raw/
-   ```
-   
-   **Option 2: Manual Download**
-   1. Visit the dataset page: [Diabetes Dataset on Kaggle](https://www.kaggle.com/datasets/ankitbatra1210/diabetes-dataset)
-   2. Click "Download" button (requires Kaggle account)
-   3. Extract the downloaded file
-   4. Place `diabetes_dataset.csv` in the `data/raw/` directory
-   
-   **Option 3: Direct Download Link**
-   - Dataset URL: https://www.kaggle.com/datasets/ankitbatra1210/diabetes-dataset
-   - After downloading, ensure the file is named `diabetes_dataset.csv` and placed in `data/raw/`
-
-3. **Install dependencies:**
+2. **Install dependencies:**
    ```bash
    pip install -r requirements.txt
    ```
 
+3. **Download dataset:**
+   
+   The dataset is available on Kaggle: [Diabetes Dataset](https://www.kaggle.com/datasets/ankitbatra1210/diabetes-dataset)
+   
+   **Using Kaggle API:**
+   ```bash
+   pip install kaggle
+   kaggle datasets download -d ankitbatra1210/diabetes-dataset
+   unzip diabetes-dataset.zip -d data/raw/
+   ```
+   
+   **Manual download:**
+   - Download from Kaggle
+   - Place `diabetes_dataset.csv` in `data/raw/` directory
+
 ## Usage
 
-### 0. Dataset Setup
+### Data Preprocessing
 
-Make sure you have downloaded the dataset and placed `diabetes_dataset.csv` in the `data/raw/` directory. If you haven't done this yet, refer to the [Installation](#installation) section above.
+Execute the preprocessing pipeline to prepare raw data:
 
-### 1. Data Preprocessing
-
-First, preprocess the raw data:
 ```bash
-cd src/preprocessing
-python data_processor.py
+python -m src.preprocessing.data_processor
 ```
 
-This will:
-- Load the raw dataset
-- Identify numerical and categorical columns
-- Encode categorical features using OneHotEncoder
-- Save the processed dataset and encoders
+This pipeline performs:
+- Column type identification (numerical/categorical)
+- Categorical feature encoding (OneHotEncoder)
+- Advanced preprocessing (outlier handling, feature engineering, multicollinearity removal)
+- Data validation and quality checks
+- Processed data persistence
 
-### 2. Training Models
+### Model Training
 
-**Option 1: Train all models at once (Recommended)**
-```bash
-cd src
-python train_all_models.py
-```
+**Batch Training (Recommended):**
 
-Or from project root:
+Train all models with default configuration:
 ```bash
 python src/train_all_models.py
 ```
 
-With custom options:
+Custom training parameters:
 ```bash
-# Train with 100 trials per model
-python src/train_all_models.py --n-trials 100
+# Specify number of Optuna trials per model
+python src/train_all_models.py --n-trials 50
 
-# Train with timeout of 1 hour per model
+# Set timeout per model (seconds)
 python src/train_all_models.py --timeout 3600
 
-# Train without saving plots
+# Disable plot generation
 python src/train_all_models.py --no-plots
 
+# Enable parallel training
+python src/train_all_models.py --parallel --max-workers 4
+
 # Combine options
-python src/train_all_models.py --n-trials 50 --timeout 1800
+python src/train_all_models.py --n-trials 50 --timeout 1800 --parallel
 ```
 
-**Option 2: Train individual models**
+**Individual Model Training:**
+
 ```bash
-cd src/models
-python knn.py
-python svm.py
-python random_forest.py
-python logistic_regression.py
-python xgboost.py
+python -m src.models.knn
+python -m src.models.naive_bayes
+python -m src.models.random_forest
+python -m src.models.logistic_regression
+python -m src.models.xgboost
+python -m src.models.lightgbm
 ```
 
-**Option 3: Train programmatically**
-```python
-import sys
-from pathlib import Path
-sys.path.insert(0, str(Path(__file__).parent / "src"))
+**Programmatic Training:**
 
-from models import (
-    KNNTrainer, SVMTrainer, RandomForestTrainer,
-    LogisticRegressionTrainer, XGBoostTrainer
+```python
+from src.models import (
+    KNNTrainer, NaiveBayesTrainer, RandomForestTrainer,
+    LogisticRegressionTrainer, XGBoostTrainer, LightGBMTrainer
 )
 
-trainers = [
-    KNNTrainer(),
-    SVMTrainer(),
-    RandomForestTrainer(),
-    LogisticRegressionTrainer(),
-    XGBoostTrainer()
-]
-
-for trainer in trainers:
-    results = trainer.train()
-    print(f"{trainer.model_name}: {results['best_score']:.4f}")
+trainer = KNNTrainer()
+results = trainer.train(
+    save_model_flag=True,
+    save_plots=True,
+    n_trials=50,
+    timeout=3600
+)
 ```
 
-### 3. Running the Web Application
+### Deployment
 
-Deploy the Streamlit web application:
+Launch the Streamlit web application:
+
 ```bash
 cd app
 streamlit run deploy.py
 ```
 
-The application will open in your browser. Fill in the patient information form and click "Submit" to get predictions.
+The application provides an interactive interface for diabetes type prediction using the trained ensemble model.
 
-## Features
+## Technical Features
 
-### Code Quality Improvements
+### Hyperparameter Optimization
 
-- ✅ **Modular Design**: Separated concerns with config, utils, and base trainer
-- ✅ **DRY Principle**: Eliminated code duplication across model files
-- ✅ **Error Handling**: Comprehensive error handling and logging
-- ✅ **Type Hints**: Added type hints for better code documentation
-- ✅ **Logging**: Integrated logging throughout the project
-- ✅ **Visualization**: Automatic confusion matrix generation
-- ✅ **Efficient Prediction**: Cached models and encoders for faster predictions
-- ✅ **Input Validation**: Validates user input in the web application
+- **Optuna Framework**: Tree-structured Parzen Estimator (TPE) sampling
+- **Median Pruning**: Early stopping for underperforming trials
+- **Model-Specific Configuration**: Optimized trial counts per model type
+- **Parallel Execution**: Multi-core optimization support
 
-### Model Training Features
+### Data Preprocessing
 
-- **Optuna** for intelligent hyperparameter optimization (replaces GridSearchCV)
-- Stratified K-Fold cross-validation
-- Automatic model evaluation and metrics
-- Confusion matrix visualization
-- Model persistence with encoders
-- Batch training script to train all models at once
+- **Automatic Type Detection**: Numerical and categorical column identification
+- **Advanced Feature Engineering**: 
+  - Outlier detection and handling (IQR, Z-score)
+  - Log transformation for skewed features
+  - Interaction feature creation
+  - Multicollinearity removal
+  - Low variance feature elimination
+- **Memory Optimization**: Efficient data type conversion and caching
 
-### Prediction Features
+### Model Training
 
-- Ensemble prediction with weighted voting
-- Efficient model loading with caching
-- Proper encoder handling for new data
-- Error handling and logging
+- **Stratified K-Fold Cross-Validation**: Maintains class distribution
+- **Intermediate Value Reporting**: Enables Optuna pruning
+- **Model Persistence**: Saves trained models with encoders
+- **Evaluation Metrics**: Comprehensive classification reports and confusion matrices
+
+### Ensemble Prediction
+
+- **Weighted Voting**: Model-specific weights for ensemble decisions
+- **Probability Calibration**: Improved probability estimates for supported models
+- **Efficient Loading**: Cached model and encoder loading
 
 ## Configuration
 
 Edit `src/config.py` to customize:
-- Random state for reproducibility
-- Test/train split ratio
-- Cross-validation folds
-- Scoring metric (precision_macro, recall_macro, f1_macro)
-- Model weights for ensemble voting
 
-## Model Weights
+- **Training Parameters**: Random state, test split ratio, CV folds
+- **Optimization Settings**: Trial counts, timeout, parallel jobs
+- **Scoring Metric**: precision_macro, recall_macro, f1_macro
+- **Model Weights**: Ensemble voting weights per model
+- **Advanced Preprocessing**: Feature engineering options
 
-The ensemble uses the following weights:
-- KNN: 50
+### Model Weights
+
+Current ensemble configuration:
+- KNN: 45
 - Logistic Regression: 75
 - Random Forest: 90
-- SVM: 75
+- Naive Bayes: 82
 - XGBoost: 90
+- LightGBM: 91
 
 ## Dataset
 
-- **Source**: [Diabetes Dataset on Kaggle](https://www.kaggle.com/datasets/ankitbatra1210/diabetes-dataset)
-- **Dataset Name**: Diabetes Dataset by Ankit Batra
-- **File Location**: `data/raw/diabetes_dataset.csv`
-- **Processed Location**: `data/processed/diabetes_dataset_processed.csv` (generated after preprocessing)
+- **Source**: [Kaggle - Diabetes Dataset](https://www.kaggle.com/datasets/ankitbatra1210/diabetes-dataset)
+- **Author**: Ankit Batra
+- **Raw Data**: `data/raw/diabetes_dataset.csv`
+- **Processed Data**: `data/processed/diabetes_dataset_processed.csv` (generated)
 
-The dataset contains various features related to diabetes assessment including genetic markers, lifestyle factors, medical history, and test results.
+The dataset contains features related to diabetes assessment including genetic markers, lifestyle factors, medical history, and clinical test results.
 
-## Notes
+## Performance
 
-- ⚠️ **Medical Disclaimer**: This is a machine learning prediction tool. Always consult with healthcare professionals for accurate medical diagnosis.
-- The models are trained on a specific dataset and may not generalize to all populations.
-- Ensure all required features are provided for accurate predictions.
-- Make sure to download the dataset from Kaggle before running preprocessing or training scripts.
+The system implements several performance optimizations:
+
+- **Data Caching**: In-memory caching for processed data across models
+- **Vectorized Operations**: NumPy-based computations for efficiency
+- **Parallel Processing**: Multi-core support for training and optimization
+- **Memory Optimization**: Efficient data type conversion and storage
+
+## Evaluation
+
+Model evaluation includes:
+
+- **Classification Metrics**: Accuracy, Precision, Recall, F1-Score (macro/micro/weighted)
+- **Confusion Matrices**: Visual heatmaps for each model
+- **Cross-Validation Scores**: Stratified K-Fold performance metrics
+- **Best Hyperparameters**: Optimal configuration per model
+
+Results are saved in the `results/` directory.
+
+## Medical Disclaimer
+
+⚠️ **Important**: This system is a machine learning prediction tool for research and educational purposes. It should not be used as a substitute for professional medical diagnosis. Always consult qualified healthcare professionals for accurate medical assessment and treatment decisions.
 
 ## Requirements
 
-See `requirements.txt` for the complete list of dependencies.
+See `requirements.txt` for complete dependency list. Key dependencies include:
+
+- scikit-learn
+- optuna
+- xgboost
+- lightgbm
+- pandas
+- numpy
+- streamlit
+- matplotlib
 
 ## License
 
-[Add your license here]
+[Specify license]
 
 ## Contributing
 
-[Add contribution guidelines here]
+[Specify contribution guidelines]

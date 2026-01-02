@@ -30,7 +30,7 @@ def _load_all_models():
     if _models_cache:
         return  # Already loaded
     
-    model_names = ['knn', 'logistic', 'randomforest', 'svm', 'xgboost']
+    model_names = ['knn', 'logistic', 'randomforest', 'naivebayes', 'xgboost', 'lightgbm']
     
     for model_name in model_names:
         try:
@@ -174,7 +174,7 @@ def prediction(user_data: pd.DataFrame, return_details: bool = False) -> str:
         
         # Get predictions from all models (optimized batch processing)
         predictions = {}
-        model_names = ['knn', 'logistic', 'randomforest', 'svm', 'xgboost']
+        model_names = ['knn', 'logistic', 'randomforest', 'naivebayes', 'xgboost', 'lightgbm']
         
         # Batch predict for efficiency (if all models support it)
         for model_name in model_names:

@@ -25,8 +25,9 @@ MODEL_SUBDIRS = {
     'knn': MODELS_DIR / "knn",
     'logistic': MODELS_DIR / "logistic_regression",
     'randomforest': MODELS_DIR / "random_forest",
-    'svm': MODELS_DIR / "svm",
-    'xgboost': MODELS_DIR / "xgboost"
+    'naivebayes': MODELS_DIR / "naive_bayes",
+    'xgboost': MODELS_DIR / "xgboost",
+    'lightgbm': MODELS_DIR / "lightgbm"
 }
 
 # Model training parameters
@@ -35,20 +36,27 @@ TEST_SIZE = 0.2
 CV_FOLDS = 5
 SCORING_METRIC = 'precision_macro'  # Scoring metric for cross-validation: 'precision_macro', 'recall_macro', or 'f1_macro'
 
+import multiprocessing
+
 # Optuna hyperparameter optimization parameters
 N_TRIALS = 50  # Default number of optimization trials
 OPTUNA_TIMEOUT = None  # Timeout in seconds (None = no timeout)
-OPTUNA_N_JOBS = -1  # Number of parallel jobs (-1 = all cores, 1 = sequential)
-# Parallel Optuna trials require independent trials for optimal performance
-# Models with early stopping or complex dependencies require sequential execution (OPTUNA_N_JOBS=1)
+OPTUNA_N_JOBS = 1  # Number of parallel jobs (1 = sequential to avoid resource exhaustion)
 
-# Model-specific trial counts (optimized for ~10 minutes per model)
+# Dynamic CPU allocation: 2/3 of available cores
+total_cores = multiprocessing.cpu_count()
+N_JOBS = max(1, int(total_cores * 2 / 3))
+
+# Parallel Optuna trials require independent trials for optimal performance
+# Models with early stopping or complex dependencies require sequential execution
+
 MODEL_TRIALS = {
-    'knn': 25,  # KNN is fast, can do more trials
-    'svm': 20,  # SVM is slower, fewer trials
-    'randomforest': 20,  # RF is moderate speed
-    'logistic': 25,  # Logistic Regression is fast
-    'xgboost': 15  # XGBoost is slower, fewer trials needed (early stopping helps)
+    'knn': 45,
+    'naivebayes': 40,
+    'randomforest': 60,
+    'logistic': 35,
+    'xgboost': 40,
+    'lightgbm': 40
 }
 
 # Model names
@@ -56,17 +64,19 @@ MODEL_NAMES = {
     'knn': 'knn_model.pkl',
     'logistic': 'logisticregression_model.pkl',
     'randomforest': 'randomforest_model.pkl',
-    'svm': 'svm_model.pkl',
-    'xgboost': 'xgboost_model.pkl'
+    'naivebayes': 'naivebayes_model.pkl',
+    'xgboost': 'xgboost_model.pkl',
+    'lightgbm': 'lightgbm_model.pkl'
 }
 
 # Model weights for ensemble prediction
 MODEL_WEIGHTS = {
-    'knn': 50,
+    'knn': 45,
     'logistic': 75,
     'randomforest': 90,
-    'svm': 75,
-    'xgboost': 90
+    'naivebayes': 82,
+    'xgboost': 90,
+    'lightgbm': 91  
 }
 
 # Advanced preprocessing options (optional - for maximum performance)

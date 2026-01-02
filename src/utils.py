@@ -1,6 +1,9 @@
 """
 Utility functions for data processing, model training, and evaluation
 """
+import matplotlib
+matplotlib.use('Agg')
+
 import logging
 import pandas as pd
 import numpy as np
@@ -24,12 +27,15 @@ except ImportError:
         RANDOM_STATE, TEST_SIZE, MODEL_NAMES
     )
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+# Setup logging với centralized config
+try:
+    from .logging_config import setup_logging, get_logger
+except ImportError:
+    from logging_config import setup_logging, get_logger
+
+# Setup logging (chỉ console, file sẽ setup khi train model)
+setup_logging(log_to_file=False)
+logger = get_logger(__name__)
 
 
 # Cache for loaded data to avoid reloading
@@ -178,143 +184,149 @@ def preprocess_data(df: pd.DataFrame, fit_encoders: bool = True,
                    advanced_options: Optional[Dict[str, Any]] = None) -> Tuple[pd.DataFrame, Optional[Dict[str, Any]]]:
     """
     Optimized preprocessing: identify numerical/categorical columns and encode categorical features
+    Also handles advanced preprocessing if enabled (Fit on Train, Transform on Test)
     
     Args:
-        df: Input DataFrame
-        fit_encoders: If True, fit new encoders. If False, use provided encoders
-        encoders: Dictionary containing fitted encoders (OneHotEncoder, LabelEncoder)
-        handle_missing: How to handle missing values ('ignore', 'drop', 'fill')
-        validate_data: Whether to validate data quality
-        use_advanced: Whether to use advanced preprocessing techniques
-        advanced_options: Dictionary of advanced preprocessing options
-        
-    Returns:
-        Tuple of (processed DataFrame, encoders dictionary)
+        df: Input DataFrame (Train or Test)
+        fit_encoders: If True, fit new encoders/artifacts. If False, use provided encoders/artifacts.
+        encoders: Dictionary containing fitted encoders and advanced artifacts
+        ...
     """
     try:
-        # Apply advanced preprocessing if requested
+        if advanced_options is None:
+            advanced_options = {}
+
+        # 1. Basic Cleaning & Validation
+        if validate_data:
+            if df.empty:
+                raise ValueError("Input DataFrame is empty")
+            if df.shape[0] < 10:
+                logger.warning(f"Very small dataset: {df.shape[0]} rows")
+            
+            # Check for completely empty columns (Only for Fit phase?)
+            # Actually, standardizing columns is safer. 
+            # If fitting, we drop empty cols. If transforming, we align cols later.
+            if fit_encoders:
+                empty_cols = df.columns[df.isnull().all()].tolist()
+                if empty_cols:
+                    logger.warning(f"Found empty columns: {empty_cols}. They will be dropped.")
+                    df = df.drop(columns=empty_cols)
+        
+        # 2. Identify Types
+        numerical_columns, category_columns = _identify_column_types(df)
+        
+        # 3. Handle Missing Values
+        # Note: Ideally missing value handling (e.g. median) should also be learned from train and applied to test.
+        # For simplicity in this iteration, we keep it per-batch or use simple fill.
+        # A robust solution would save 'median' values in artifacts.
+        if handle_missing != 'ignore' and numerical_columns:
+            if handle_missing == 'fill':
+                 # Determine fill values (TODO: Save this in artifacts for strict correctness)
+                 df[numerical_columns] = df[numerical_columns].fillna(df[numerical_columns].median())
+            elif handle_missing == 'drop':
+                 df = df.dropna(subset=numerical_columns)
+
+        # 4. Advanced Preprocessing (Before OneHot to handle Numerical Outliers/Features)
+        # Note: Some advanced steps (like binning) might create categorical features.
+        # However, looking at advanced_preprocessing.py, most output numerical or modify numericals.
+        # We'll run it here.
+        advanced_artifacts = None
+        if encoders and 'advanced_artifacts' in encoders:
+            advanced_artifacts = encoders['advanced_artifacts']
+            
         if use_advanced:
             try:
                 from .preprocessing.advanced_preprocessing import advanced_preprocessing_pipeline
             except ImportError:
                 from preprocessing.advanced_preprocessing import advanced_preprocessing_pipeline
             
-            if advanced_options is None:
-                advanced_options = {}
+            # Pass artifacts if they exist (for Transform phase)
+            # If fit_encoders is True, artifacts should be None (Fit phase) unless we want to continue?
+            # Typically fit_encoders=True means "Learn everything new".
             
-            logger.info("Applying advanced preprocessing techniques...")
-            df, advanced_artifacts = advanced_preprocessing_pipeline(
+            pass_artifacts = advanced_artifacts if not fit_encoders else None
+            
+            # Extract flags from advanced_options
+            df, new_advanced_artifacts = advanced_preprocessing_pipeline(
                 df,
                 target_col='Target',
-                **advanced_options
+                handle_outliers_flag=advanced_options.get('handle_outliers', True),
+                outlier_method=advanced_options.get('outlier_method', 'cap'),
+                apply_scaling_flag=advanced_options.get('apply_scaling', False),
+                scaling_method=advanced_options.get('scaling_method', 'robust'),
+                create_interactions_flag=advanced_options.get('create_interactions', False),
+                max_interactions=advanced_options.get('max_interactions', 10),
+                create_bins_flag=advanced_options.get('create_bins', False),
+                apply_log_transform_flag=advanced_options.get('apply_log_transform', True),
+                remove_multicollinear_flag=advanced_options.get('remove_multicollinear', True),
+                remove_low_variance_flag=advanced_options.get('remove_low_variance', True),
+                feature_selection=advanced_options.get('feature_selection', None),
+                n_features_select=advanced_options.get('n_features_select', 50),
+                artifacts=pass_artifacts
             )
             
-            # Merge advanced artifacts into encoders dict
-            if encoders is None:
-                encoders = {}
-            encoders['advanced_artifacts'] = advanced_artifacts
-        # Data validation
-        if validate_data:
-            if df.empty:
-                raise ValueError("Input DataFrame is empty")
-            
-            if df.shape[0] < 10:
-                logger.warning(f"Very small dataset: {df.shape[0]} rows")
-            
-            # Check for completely empty columns
-            empty_cols = df.columns[df.isnull().all()].tolist()
-            if empty_cols:
-                logger.warning(f"Found empty columns: {empty_cols}. They will be dropped.")
-                df = df.drop(columns=empty_cols)
-        
-        # Identify column types efficiently
+            if fit_encoders:
+                advanced_artifacts = new_advanced_artifacts
+
+        # Re-identify types after advanced processing (new cols might appear)
         numerical_columns, category_columns = _identify_column_types(df)
+
+        # 5. OneHot Encoding
+        encoded_df = pd.DataFrame(index=df.index)
         
-        # Reduced logging for cleaner output
-        if len(numerical_columns) > 0 or len(category_columns) > 0:
-            logger.debug(f"Identified {len(numerical_columns)} numerical and {len(category_columns)} categorical columns")
-        
-        # Handle missing values in numerical columns
-        if handle_missing != 'ignore' and numerical_columns:
-            missing_numerical = df[numerical_columns].isnull().sum()
-            if missing_numerical.sum() > 0:
-                logger.debug(f"Found missing values in numerical columns: {missing_numerical[missing_numerical > 0].to_dict()}")
-                if handle_missing == 'fill':
-                    df[numerical_columns] = df[numerical_columns].fillna(df[numerical_columns].median())
-                elif handle_missing == 'drop':
-                    df = df.dropna(subset=numerical_columns)
-        
-        # Process categorical columns
         if category_columns:
             if fit_encoders:
-                # Fit new encoders
                 encoder = OneHotEncoder(
                     sparse_output=False, 
                     handle_unknown='ignore',
-                    drop='if_binary'  # Optimize: drop one column for binary features
+                    drop='if_binary'
                 )
-                
-                # Check for empty categorical columns
                 non_empty_cats = [col for col in category_columns if df[col].notna().any()]
-                if len(non_empty_cats) < len(category_columns):
-                    logger.warning(f"Skipping {len(category_columns) - len(non_empty_cats)} empty categorical columns")
-                
                 if non_empty_cats:
-                    encoded_df = encoder.fit_transform(df[non_empty_cats])
+                    encoded_array = encoder.fit_transform(df[non_empty_cats])
                     encoded_df = pd.DataFrame(
-                        encoded_df, 
+                        encoded_array, 
                         columns=encoder.get_feature_names_out(non_empty_cats),
                         index=df.index
                     )
-                else:
-                    encoded_df = pd.DataFrame(index=df.index)
                 
-                encoders = {
-                    'onehot': encoder,
-                    'categorical_columns': non_empty_cats,
-                    'label': None  # Will be set separately for target
-                }
+                # Initialize encoders dict if None
+                if encoders is None: encoders = {}
+                encoders['onehot'] = encoder
+                encoders['categorical_columns'] = non_empty_cats
             else:
-                # Use existing encoders
                 if encoders is None or 'onehot' not in encoders:
-                    raise ValueError("Encoders must be provided when fit_encoders=False")
-                
-                encoder = encoders['onehot']
-                cat_cols = encoders.get('categorical_columns', category_columns)
-                
-                # Handle missing categorical columns
-                missing_cats = set(cat_cols) - set(df.columns)
-                if missing_cats:
-                    logger.warning(f"Missing categorical columns in input: {missing_cats}")
-                    cat_cols = [col for col in cat_cols if col in df.columns]
-                
-                if cat_cols:
-                    encoded_df = encoder.transform(df[cat_cols])
-                    encoded_df = pd.DataFrame(
-                        encoded_df,
-                        columns=encoder.get_feature_names_out(cat_cols),
-                        index=df.index
-                    )
+                     # Fallback if no encoder provided but cat columns exist? Error or ignore?
+                     # raise ValueError("Encoders must be provided when fit_encoders=False")
+                     logger.warning("No OneHotEncoder provided for categorical columns. Skipping encoding.")
                 else:
-                    encoded_df = pd.DataFrame(index=df.index)
-        else:
-            encoded_df = pd.DataFrame(index=df.index)
-            if fit_encoders:
-                encoders = {
-                    'onehot': None,
-                    'categorical_columns': [],
-                    'label': None
-                }
+                    encoder = encoders['onehot']
+                    cat_cols = encoders.get('categorical_columns', [])
+                    
+                    # Columns expected by encoder might be missing or new cols might exist
+                    # We only transform columns that were present during fit
+                    valid_cols = [c for c in cat_cols if c in df.columns]
+                    
+                    if valid_cols:
+                        encoded_array = encoder.transform(df[valid_cols])
+                        encoded_df = pd.DataFrame(
+                            encoded_array,
+                            columns=encoder.get_feature_names_out(valid_cols),
+                            index=df.index
+                        )
+                    else:
+                        # Create empty DF with expected columns filled with 0?
+                        # Or just empty. Pipeline expects consistent features.
+                        # Usually sklearn handles this via handle_unknown='ignore' if we pass all cols?
+                        # But we filter cols here.
+                        pass # Empty DF
         
-        # Process numerical columns
+        # 6. Combine Numerical & Categorical
         if numerical_columns:
-            numerical_df = df[numerical_columns].copy()
-            # Convert to float efficiently
-            numerical_df = numerical_df.astype(float)
+            numerical_df = df[numerical_columns].copy().astype(float)
         else:
             numerical_df = pd.DataFrame(index=df.index)
-        
-        # Combine numerical and encoded categorical features efficiently
+            
         if not numerical_df.empty and not encoded_df.empty:
             df_processed = pd.concat([numerical_df, encoded_df], axis=1)
         elif not numerical_df.empty:
@@ -322,97 +334,34 @@ def preprocess_data(df: pd.DataFrame, fit_encoders: bool = True,
         elif not encoded_df.empty:
             df_processed = encoded_df
         else:
-            raise ValueError("No features to process")
-        
-        # Ensure all columns are numeric
+            if fit_encoders: # Only error on train, test might just be weird
+                raise ValueError("No features to process")
+            else:
+                df_processed = pd.DataFrame(index=df.index)
+
+        # 7. Final Adjustments
         df_processed = df_processed.astype(float)
         
-        # Add target column if present
+        # Add target back if it exists (it's not a feature)
         if 'Target' in df.columns:
-            df_processed['Target'] = df['Target'].astype(str)  # Keep as string for now
-        
-        logger.debug(f"Preprocessed data: {df_processed.shape[0]} rows, {df_processed.shape[1]} columns")
-        logger.debug(f"  - Numerical features: {len(numerical_columns)}")
-        logger.debug(f"  - Encoded categorical features: {encoded_df.shape[1] if not encoded_df.empty else 0}")
-        
+            df_processed['Target'] = df['Target'].astype(str)
+
+        # Update encoders dict
+        if encoders is None: encoders = {}
+        if advanced_artifacts:
+            encoders['advanced_artifacts'] = advanced_artifacts
+            
         return df_processed, encoders
-    
+
     except Exception as e:
         logger.error(f"Error preprocessing data: {str(e)}")
-        raise
-
-
-def prepare_training_data(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.Series, LabelEncoder]:
-    """
-    Prepare data for training: encode target and split features/labels
-    
-    Args:
-        df: Processed DataFrame with Target column
-        
-    Returns:
-        Tuple of (X features, y target, label_encoder)
-    """
-    try:
-        le = LabelEncoder()
-        df = df.copy()
-        df['Target'] = le.fit_transform(df['Target'])
-        
-        X = df.drop(columns=['Target'])
-        y = df['Target']
-        
-        logger.info(f"Prepared training data: X shape {X.shape}, y shape {y.shape}")
-        logger.info(f"Target classes: {le.classes_}")
-        
-        return X, y, le
-    
-    except Exception as e:
-        logger.error(f"Error preparing training data: {str(e)}")
-        raise
-
-
-def split_data(X: pd.DataFrame, y: pd.Series, test_size: float = TEST_SIZE, 
-               random_state: int = RANDOM_STATE, use_cache: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series]:
-    """
-    Split data into train and test sets with caching
-    
-    Args:
-        X: Features
-        y: Target
-        test_size: Proportion of test set
-        random_state: Random seed
-        use_cache: Whether to use cached split if available
-        
-    Returns:
-        Tuple of (X_train, X_test, y_train, y_test)
-    """
-    global _split_data_cache
-    
-    try:
-        # Check cache
-        if use_cache and _split_data_cache is not None:
-            X_train, X_test, y_train, y_test, _ = _split_data_cache
-            logger.debug("Using cached split data")
-            return X_train, X_test, y_train, y_test
-        
-        X_train, X_test, y_train, y_test = train_test_split(
-            X, y, test_size=test_size, random_state=random_state, stratify=y
-        )
-        logger.info(f"Split data: Train {X_train.shape[0]} samples, Test {X_test.shape[0]} samples")
-        
-        # Cache the split (without label_encoder for now)
-        if use_cache:
-            _split_data_cache = (X_train, X_test, y_train, y_test, None)
-        
-        return X_train, X_test, y_train, y_test
-    
-    except Exception as e:
-        logger.error(f"Error splitting data: {str(e)}")
         raise
 
 
 def get_prepared_data(use_cache: bool = True) -> Tuple[pd.DataFrame, pd.DataFrame, pd.Series, pd.Series, LabelEncoder, Dict[str, Any]]:
     """
     Get prepared training data with caching (shared across all models)
+    PREVENT DATA LEAKAGE: Split first, then process.
     
     Args:
         use_cache: Whether to use cached data if available
@@ -423,36 +372,121 @@ def get_prepared_data(use_cache: bool = True) -> Tuple[pd.DataFrame, pd.DataFram
     global _processed_data_cache, _split_data_cache
     
     try:
-        # Check if we have cached split data
-        if use_cache and _split_data_cache is not None:
+        # Check cache (return both split data AND encoders)
+        if use_cache and _split_data_cache is not None and _processed_data_cache is not None:
             X_train, X_test, y_train, y_test, label_encoder = _split_data_cache
-            if label_encoder is not None:
-                # Get encoders from processed data cache
-                _, encoders = _processed_data_cache if _processed_data_cache else (None, None)
-                logger.debug("Using cached prepared data")
-                return X_train, X_test, y_train, y_test, label_encoder, encoders
+            _, encoders = _processed_data_cache
+            logger.debug("Using cached prepared data")
+            return X_train, X_test, y_train, y_test, label_encoder, encoders
         
-        # Load and preprocess data
+        # 1. Load Raw Data
         df = load_data(use_cache=use_cache)
-        df_processed, encoders = preprocess_data(df, fit_encoders=True)
         
-        # Cache processed data
+        # 2. Encode Target & Split X, y (BEFORE any processing)
+        # We need to identify Target column. Assuming 'Target'.
+        le = LabelEncoder()
+        
+        if 'Target' not in df.columns:
+            raise ValueError("Target column not found in dataset")
+            
+        # Drop rows with missing target?
+        df = df.dropna(subset=['Target'])
+        
+        y_all = df['Target']
+        y_encoded = le.fit_transform(y_all)
+        X_all = df.drop(columns=['Target'])
+        
+        # 3. Split Train/Test
+        # We need a temporary DF to leverage split_data utility or just call train_test_split
+        # split_data expects dataframe X and Series y.
+        X_train_raw, X_test_raw, y_train, y_test = train_test_split(
+            X_all, y_encoded, test_size=TEST_SIZE, random_state=RANDOM_STATE, stratify=y_encoded
+        )
+        
+        # Note: We need y_train/test to be Series ?? train_test_split returns arrays usually if input is array, but here input is DF/Series.
+        y_train = pd.Series(y_train, index=X_train_raw.index)
+        y_test = pd.Series(y_test, index=X_test_raw.index)
+        
+        logger.info(f"Split raw data: Train {X_train_raw.shape} samples, Test {X_test_raw.shape} samples")
+
+        # 4. Preprocess Train (FIT) and Test (TRANSFORM)
+        # We need advanced options from config
+        try:
+             from .config import USE_ADVANCED_PREPROCESSING, ADVANCED_PREPROCESSING_OPTIONS
+        except ImportError:
+             from config import USE_ADVANCED_PREPROCESSING, ADVANCED_PREPROCESSING_OPTIONS
+             
+        # Process Train
+        logger.info("Preprocessing Training Data (Fit)...")
+        # We temporarily add Target back for compatibility if preprocessing relies on it (e.g. supervised selection)? 
+        # But our current structure separates X and y in split_data. 
+        # Advanced pipeline `select_features_statistical` takes y argument logic.
+        # But `preprocess_data` takes a DF. The `advanced_preprocessing_pipeline` takes a DF.
+        # Ideally, we pass X and y separately?
+        # Current `preprocess_data` signature takes `df`. 
+        # Let's attach y back temporarily for preprocessing if needed?
+        # Actually `advanced_preprocessing_pipeline` signature takes `df`.
+        
+        train_df = X_train_raw.copy()
+        # If we want to use target-based feature selection inside preprocessing, we need Target in DF
+        # But y is already encoded. Preprocessing might expect string if it does encoding?
+        # Wait, advanced pipeline does `select_features_statistical` which takes y.
+        # If we put encoded y into `Target` column, it should work.
+        train_df['Target'] = y_train 
+        
+        X_train_processed_df, encoders = preprocess_data(
+            train_df, 
+            fit_encoders=True,
+            use_advanced=USE_ADVANCED_PREPROCESSING,
+            advanced_options=ADVANCED_PREPROCESSING_OPTIONS
+        )
+        
+        # Process Test
+        logger.info("Preprocessing Test Data (Transform)...")
+        test_df = X_test_raw.copy()
+        # Test set shouldn't have Target used for feature selection, but pipeline might verify it exists or is passed?
+        # In transform mode, `select_features_statistical` ignores y.
+        test_df['Target'] = y_test # Optional, just for consistency if pipeline expects it
+        
+        X_test_processed_df, _ = preprocess_data(
+            test_df,
+            fit_encoders=False,
+            encoders=encoders,
+            use_advanced=USE_ADVANCED_PREPROCESSING,
+            advanced_options=ADVANCED_PREPROCESSING_OPTIONS
+        )
+        
+        # 5. Finalize X and y
+        # Drop Target column from processed DFs
+        if 'Target' in X_train_processed_df.columns:
+            X_train = X_train_processed_df.drop(columns=['Target'])
+        else:
+            X_train = X_train_processed_df # Should be clean X
+
+        if 'Target' in X_test_processed_df.columns:
+            X_test = X_test_processed_df.drop(columns=['Target'])
+        else:
+            X_test = X_test_processed_df
+            
+        # Align columns of Test to match Train (handle missing/extra cols from OneHot)
+        # This is critical for preventing shape mismatch
+        train_cols = X_train.columns.tolist()
+        miss_cols = set(train_cols) - set(X_test.columns)
+        for c in miss_cols:
+            X_test[c] = 0
+            
+        # Reorder to match exactly
+        X_test = X_test[train_cols]
+
+        logger.info(f"Final Data Shapes: X_train {X_train.shape}, X_test {X_test.shape}")
+
+        # 6. Cache
         if use_cache:
-            _processed_data_cache = (df_processed, encoders)
+            # We construct `_processed_data_cache` to store encoders. df_processed is less relevant here.
+            _processed_data_cache = (None, encoders) 
+            _split_data_cache = (X_train, X_test, y_train, y_test, le)
         
-        # Prepare training data
-        X, y, label_encoder = prepare_training_data(df_processed)
-        
-        # Split data
-        X_train, X_test, y_train, y_test = split_data(X, y, use_cache=use_cache)
-        
-        # Keep as DataFrame/Series for sklearn pipeline compatibility (needs feature names)
-        # Cache split data with label encoder
-        if use_cache:
-            _split_data_cache = (X_train, X_test, y_train, y_test, label_encoder)
-        
-        logger.debug(f"Prepared data for training: X_train {X_train.shape}, X_test {X_test.shape}")
-        return X_train, X_test, y_train, y_test, label_encoder, encoders
+        return X_train, X_test, y_train, y_test, le, encoders
     
     except Exception as e:
         logger.error(f"Error getting prepared data: {str(e)}")
@@ -527,6 +561,8 @@ def evaluate_model(model: Any, X_test: pd.DataFrame, y_test: pd.Series,
                             fontsize=12, fontweight='bold')
                 ax1.set_xlabel('Predicted', fontsize=11, fontweight='bold')
                 ax1.set_ylabel('Actual', fontsize=11, fontweight='bold')
+                plt.setp(ax1.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+                plt.setp(ax1.get_yticklabels(), rotation=45, ha="right", rotation_mode="anchor")
                 
                 # Plot 2: Normalized confusion matrix (percentages)
                 cm_normalized = cm.astype('float') / cm.sum(axis=1)[:, np.newaxis]
@@ -537,6 +573,8 @@ def evaluate_model(model: Any, X_test: pd.DataFrame, y_test: pd.Series,
                             fontsize=12, fontweight='bold')
                 ax2.set_xlabel('Predicted', fontsize=11, fontweight='bold')
                 ax2.set_ylabel('Actual', fontsize=11, fontweight='bold')
+                plt.setp(ax2.get_xticklabels(), rotation=45, ha="right", rotation_mode="anchor")
+                plt.setp(ax2.get_yticklabels(), rotation=45, ha="right", rotation_mode="anchor")
                 
                 plt.tight_layout()
                 

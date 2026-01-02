@@ -2,11 +2,20 @@
 Script to train all models at once with optional parallel training
 """
 import sys
+import os
 from pathlib import Path
 import logging
 from datetime import datetime
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from multiprocessing import cpu_count
+
+# Limit OpenBLAS threads to avoid resource exhaustion
+# Set to reasonable number (half of CPU cores or max 8)
+max_threads = min(cpu_count() // 2, 8)
+os.environ['OPENBLAS_NUM_THREADS'] = str(max_threads)
+os.environ['MKL_NUM_THREADS'] = str(max_threads)
+os.environ['NUMEXPR_NUM_THREADS'] = str(max_threads)
+os.environ['OMP_NUM_THREADS'] = str(max_threads)
 
 # Add src to path (file is now in src/, so parent is project root)
 project_root = Path(__file__).parent.parent
@@ -14,20 +23,25 @@ src_path = Path(__file__).parent
 sys.path.insert(0, str(src_path))
 
 from models import (
-    KNNTrainer, SVMTrainer, RandomForestTrainer,
-    LogisticRegressionTrainer, XGBoostTrainer
+    KNNTrainer, NaiveBayesTrainer, RandomForestTrainer,
+    LogisticRegressionTrainer, XGBoostTrainer, LightGBMTrainer
 )
 
-# Setup logging
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler(project_root / f'training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'),
-        logging.StreamHandler()
-    ]
+# Setup logging với centralized config
+try:
+    from logging_config import setup_logging, get_logger
+except ImportError:
+    from .logging_config import setup_logging, get_logger
+
+# Setup logging với file handler
+log_file = project_root / f'training_{datetime.now().strftime("%Y%m%d_%H%M%S")}.log'
+setup_logging(
+    log_file=log_file,
+    log_to_console=True,
+    log_to_file=True,
+    force_reconfigure=True
 )
-logger = logging.getLogger(__name__)
+logger = get_logger(__name__)
 
 
 def _train_single_model(model_name: str, trainer_class, n_trials: int, timeout: int, save_plots: bool):
@@ -89,10 +103,11 @@ def train_all_models(n_trials=None, timeout=None, save_plots=True, parallel=Fals
     """
     trainers = [
         ('KNN', KNNTrainer),
-        ('SVM', SVMTrainer),
+        ('Naive Bayes', NaiveBayesTrainer),
         ('Random Forest', RandomForestTrainer),
         ('Logistic Regression', LogisticRegressionTrainer),
-        ('XGBoost', XGBoostTrainer)
+        ('XGBoost', XGBoostTrainer),
+        ('LightGBM', LightGBMTrainer)
     ]
     
     results = {}
@@ -108,8 +123,8 @@ def train_all_models(n_trials=None, timeout=None, save_plots=True, parallel=Fals
     logger.info("=" * 60)
     
     if parallel:
-        # Parallel training: each process has its own memory space, so data cache is not shared
-        # Sequential training is more efficient for data caching
+        # Parallel training uses separate memory spaces per process
+        # Data cache is not shared across processes in parallel mode
         logger.warning("Parallel training enabled. Data cache is not shared across processes in parallel mode.")
         with ProcessPoolExecutor(max_workers=max_workers) as executor:
             futures = {
@@ -123,7 +138,7 @@ def train_all_models(n_trials=None, timeout=None, save_plots=True, parallel=Fals
                 if result['status'] != 'success':
                     logger.error(f"✗ {model_name} failed: {result.get('error', 'Unknown error')}")
     else:
-        # Sequential training: allows efficient data cache sharing across all models
+        # Sequential training enables efficient data cache sharing across all models
         for model_name, trainer_class in trainers:
             _, result = _train_single_model(model_name, trainer_class, n_trials, timeout, save_plots)
             results[model_name] = result
